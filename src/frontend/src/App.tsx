@@ -27,9 +27,10 @@ const CENTRES: Record<number, string> = {
   499: "Cummer",
   643: "Goulding",
   42: "Antibes",
+  567: "Douglas Snow",
+  3775: "Ethennonnhawahstihnen",
 };
 
-// Age min/max in the data are in YEARS
 const AGE_GROUPS = [
   { label: "Preschool (0–5 yrs)", minYears: 0, maxYears: 5 },
   { label: "Kids (6–12 yrs)", minYears: 6, maxYears: 12 },
@@ -73,6 +74,11 @@ interface RawEntry {
   firstDate: string;
   lastDate: string;
   dayOfWeek: string;
+}
+
+interface RawData {
+  sports: RawEntry[];
+  swimming: RawEntry[];
 }
 
 interface Session {
@@ -149,9 +155,166 @@ function ageGroupOverlaps(
   return session.ageMin <= group.maxYears && session.ageMax >= group.minYears;
 }
 
+function applyFilters(
+  sessions: Session[],
+  filterCentre: string,
+  filterActivity: string,
+  filterAgeGroup: string,
+  filterDay: string,
+  filterWeek: "this" | "next" | "all",
+  showActivityFilter: boolean,
+): Session[] {
+  let result = sessions;
+  if (filterCentre !== "all") {
+    result = result.filter((s) => String(s.locationId) === filterCentre);
+  }
+  if (showActivityFilter && filterActivity !== "all") {
+    result = result.filter((s) => s.activity === filterActivity);
+  }
+  if (filterAgeGroup !== "all") {
+    const group = AGE_GROUPS.find((g) => g.label === filterAgeGroup);
+    if (group) result = result.filter((s) => ageGroupOverlaps(s, group));
+  }
+  if (filterDay !== "all") {
+    result = result.filter((s) => s.day === filterDay);
+  }
+  if (filterWeek !== "all") {
+    const offset = filterWeek === "this" ? 0 : 1;
+    const { start, end } = getWeekBounds(offset);
+    result = result.filter((s) => {
+      const [y, mo, d] = s.date.split("-").map(Number);
+      const sessionDate = new Date(y, mo - 1, d);
+      return sessionDate >= start && sessionDate <= end;
+    });
+  }
+  return [...result].sort((a, b) => {
+    const dayDiff = DAYS_ORDER.indexOf(a.day) - DAYS_ORDER.indexOf(b.day);
+    if (dayDiff !== 0) return dayDiff;
+    return a.startHour !== b.startHour
+      ? a.startHour - b.startHour
+      : a.startMinute - b.startMinute;
+  });
+}
+
+// ── Schedule Table ────────────────────────────────────────────────────────────
+
+function ScheduleTable({
+  sessions,
+  isLoading,
+  isError,
+  showActivityCol,
+}: {
+  sessions: Session[];
+  isLoading: boolean;
+  isError: boolean;
+  showActivityCol: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-3" data-ocid="schedule.loading_state">
+        {Array.from({ length: 8 }).map((_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: skeleton
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div
+        className="p-12 flex flex-col items-center gap-4 text-center"
+        data-ocid="schedule.error_state"
+      >
+        <AlertCircle className="w-10 h-10 text-destructive" />
+        <p className="text-foreground font-medium">
+          Failed to load schedule data
+        </p>
+        <p className="text-muted-foreground text-sm">
+          There was a problem loading the data.
+        </p>
+      </div>
+    );
+  }
+  if (sessions.length === 0) {
+    return (
+      <div
+        className="p-12 flex flex-col items-center gap-3 text-center"
+        data-ocid="schedule.empty_state"
+      >
+        <CalendarX className="w-10 h-10 text-muted-foreground" />
+        <p className="text-foreground font-medium">No sessions found</p>
+        <p className="text-muted-foreground text-sm">
+          Try adjusting your filters or selecting a different week.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-x-auto">
+      <Table data-ocid="schedule.table">
+        <TableHeader>
+          <TableRow style={{ backgroundColor: "oklch(var(--table-header))" }}>
+            <TableHead className="font-semibold text-foreground text-sm">
+              Community Centre
+            </TableHead>
+            {showActivityCol && (
+              <TableHead className="font-semibold text-foreground text-sm">
+                Activity
+              </TableHead>
+            )}
+            <TableHead className="font-semibold text-foreground text-sm">
+              Day
+            </TableHead>
+            <TableHead className="font-semibold text-foreground text-sm">
+              Date
+            </TableHead>
+            <TableHead className="font-semibold text-foreground text-sm">
+              Time
+            </TableHead>
+            <TableHead className="font-semibold text-foreground text-sm">
+              Ages
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sessions.map((s, i) => (
+            <TableRow
+              key={`${s.locationId}-${s.activity}-${s.date}-${s.startHour}-${s.startMinute}`}
+              data-ocid={`schedule.item.${i + 1}`}
+              className="hover:bg-muted/40 transition-colors"
+            >
+              <TableCell className="font-medium text-foreground py-3">
+                {s.centre}
+              </TableCell>
+              {showActivityCol && (
+                <TableCell className="text-foreground py-3">
+                  {s.activity}
+                </TableCell>
+              )}
+              <TableCell className="text-foreground py-3">{s.day}</TableCell>
+              <TableCell className="text-foreground py-3 whitespace-nowrap">
+                {formatDate(s.date)}
+              </TableCell>
+              <TableCell className="text-foreground py-3 whitespace-nowrap">
+                {formatTime(s.startHour, s.startMinute)} –{" "}
+                {formatTime(s.endHour, s.endMinute)}
+              </TableCell>
+              <TableCell className="text-muted-foreground py-3 whitespace-nowrap">
+                {formatAges(s.ageMin, s.ageMax)}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [activeTab, setActiveTab] = useState<"sports" | "swimming">("sports");
+
   const [filterCentre, setFilterCentre] = useState("all");
   const [filterActivity, setFilterActivity] = useState("all");
   const [filterAgeGroup, setFilterAgeGroup] = useState("all");
@@ -163,8 +326,8 @@ export default function App() {
     isLoading,
     isError,
   } = useQuery({
-    queryKey: ["dropInSports"],
-    queryFn: async (): Promise<RawEntry[]> => {
+    queryKey: ["dropInData"],
+    queryFn: async (): Promise<RawData> => {
       const res = await fetch("/dropin-data.json");
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
@@ -172,59 +335,55 @@ export default function App() {
     staleTime: Number.POSITIVE_INFINITY,
   });
 
-  const sessions = useMemo(
-    () => (rawData ? parseData(rawData) : []),
+  const sportsSessions = useMemo(
+    () => (rawData ? parseData(rawData.sports) : []),
+    [rawData],
+  );
+
+  const swimSessions = useMemo(
+    () => (rawData ? parseData(rawData.swimming) : []),
     [rawData],
   );
 
   const activities = useMemo(() => {
-    const set = new Set(sessions.map((s) => s.activity));
+    const set = new Set(sportsSessions.map((s) => s.activity));
     return Array.from(set).sort();
-  }, [sessions]);
+  }, [sportsSessions]);
 
-  const filtered = useMemo(() => {
-    let result = sessions;
+  const filteredSports = useMemo(
+    () =>
+      applyFilters(
+        sportsSessions,
+        filterCentre,
+        filterActivity,
+        filterAgeGroup,
+        filterDay,
+        filterWeek,
+        true,
+      ),
+    [
+      sportsSessions,
+      filterCentre,
+      filterActivity,
+      filterAgeGroup,
+      filterDay,
+      filterWeek,
+    ],
+  );
 
-    if (filterCentre !== "all") {
-      result = result.filter((s) => String(s.locationId) === filterCentre);
-    }
-    if (filterActivity !== "all") {
-      result = result.filter((s) => s.activity === filterActivity);
-    }
-    if (filterAgeGroup !== "all") {
-      const group = AGE_GROUPS.find((g) => g.label === filterAgeGroup);
-      if (group) result = result.filter((s) => ageGroupOverlaps(s, group));
-    }
-    if (filterDay !== "all") {
-      result = result.filter((s) => s.day === filterDay);
-    }
-    if (filterWeek !== "all") {
-      const offset = filterWeek === "this" ? 0 : 1;
-      const { start, end } = getWeekBounds(offset);
-      result = result.filter((s) => {
-        const [y, mo, d] = s.date.split("-").map(Number);
-        const sessionDate = new Date(y, mo - 1, d);
-        return sessionDate >= start && sessionDate <= end;
-      });
-    }
-
-    result = [...result].sort((a, b) => {
-      const dayDiff = DAYS_ORDER.indexOf(a.day) - DAYS_ORDER.indexOf(b.day);
-      if (dayDiff !== 0) return dayDiff;
-      return a.startHour !== b.startHour
-        ? a.startHour - b.startHour
-        : a.startMinute - b.startMinute;
-    });
-
-    return result;
-  }, [
-    sessions,
-    filterCentre,
-    filterActivity,
-    filterAgeGroup,
-    filterDay,
-    filterWeek,
-  ]);
+  const filteredSwim = useMemo(
+    () =>
+      applyFilters(
+        swimSessions,
+        filterCentre,
+        "all",
+        filterAgeGroup,
+        filterDay,
+        filterWeek,
+        false,
+      ),
+    [swimSessions, filterCentre, filterAgeGroup, filterDay, filterWeek],
+  );
 
   const clearFilters = () => {
     setFilterCentre("all");
@@ -233,6 +392,8 @@ export default function App() {
     setFilterDay("all");
     setFilterWeek("this");
   };
+
+  const activeSessions = activeTab === "sports" ? filteredSports : filteredSwim;
 
   return (
     <div
@@ -254,7 +415,7 @@ export default function App() {
       {/* Main */}
       <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-8">
         <h1 className="text-3xl font-bold text-center text-foreground mb-8 tracking-tight">
-          North York Drop-In Sports Schedule
+          North York Drop-In Schedule
         </h1>
 
         {/* Card */}
@@ -262,6 +423,24 @@ export default function App() {
           className="bg-card rounded-xl border border-border"
           style={{ boxShadow: "0 8px 20px rgba(0,0,0,0.08)" }}
         >
+          {/* Tabs */}
+          <div className="flex border-b border-border">
+            {(["sports", "swimming"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`px-6 py-3 text-sm font-semibold capitalize transition-colors border-b-2 ${
+                  activeTab === tab
+                    ? "border-primary text-primary"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {tab === "sports" ? "Sports" : "Swimming"}
+              </button>
+            ))}
+          </div>
+
           {/* Filters */}
           <div className="p-5 border-b border-border">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
@@ -288,31 +467,33 @@ export default function App() {
                 </Select>
               </div>
 
-              {/* Activity */}
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-wide">
-                  Activity
-                </p>
-                <Select
-                  value={filterActivity}
-                  onValueChange={setFilterActivity}
-                >
-                  <SelectTrigger
-                    className="w-full bg-card border-border"
-                    data-ocid="activity.select"
+              {/* Activity (Sports tab only) */}
+              {activeTab === "sports" && (
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-wide">
+                    Activity
+                  </p>
+                  <Select
+                    value={filterActivity}
+                    onValueChange={setFilterActivity}
                   >
-                    <SelectValue placeholder="All Activities" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Activities</SelectItem>
-                    {activities.map((a) => (
-                      <SelectItem key={a} value={a}>
-                        {a}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                    <SelectTrigger
+                      className="w-full bg-card border-border"
+                      data-ocid="activity.select"
+                    >
+                      <SelectValue placeholder="All Activities" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Activities</SelectItem>
+                      {activities.map((a) => (
+                        <SelectItem key={a} value={a}>
+                          {a}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {/* Age Group */}
               <div>
@@ -416,108 +597,24 @@ export default function App() {
               {isLoading ? (
                 <Skeleton className="h-4 w-32" />
               ) : (
-                `Showing ${filtered.length} session${filtered.length !== 1 ? "s" : ""}`
+                `Showing ${activeSessions.length} session${activeSessions.length !== 1 ? "s" : ""}`
               )}
             </span>
           </div>
 
-          {/* Table area */}
-          {isLoading ? (
-            <div className="p-6 space-y-3" data-ocid="schedule.loading_state">
-              {Array.from({ length: 8 }).map((_, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: skeleton placeholders
-                <Skeleton key={i} className="h-10 w-full" />
-              ))}
-            </div>
-          ) : isError ? (
-            <div
-              className="p-12 flex flex-col items-center gap-4 text-center"
-              data-ocid="schedule.error_state"
-            >
-              <AlertCircle className="w-10 h-10 text-destructive" />
-              <p className="text-foreground font-medium">
-                Failed to load schedule data
-              </p>
-              <p className="text-muted-foreground text-sm">
-                There was a problem loading the drop-in sports data.
-              </p>
-            </div>
-          ) : filtered.length === 0 ? (
-            <div
-              className="p-12 flex flex-col items-center gap-3 text-center"
-              data-ocid="schedule.empty_state"
-            >
-              <CalendarX className="w-10 h-10 text-muted-foreground" />
-              <p className="text-foreground font-medium">No sessions found</p>
-              <p className="text-muted-foreground text-sm">
-                Try adjusting your filters or selecting a different week.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table data-ocid="schedule.table">
-                <TableHeader>
-                  <TableRow
-                    style={{ backgroundColor: "oklch(var(--table-header))" }}
-                  >
-                    <TableHead className="font-semibold text-foreground text-sm">
-                      Community Centre
-                    </TableHead>
-                    <TableHead className="font-semibold text-foreground text-sm">
-                      Activity
-                    </TableHead>
-                    <TableHead className="font-semibold text-foreground text-sm">
-                      Day
-                    </TableHead>
-                    <TableHead className="font-semibold text-foreground text-sm">
-                      Date
-                    </TableHead>
-                    <TableHead className="font-semibold text-foreground text-sm">
-                      Time
-                    </TableHead>
-                    <TableHead className="font-semibold text-foreground text-sm">
-                      Ages
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map((s, i) => (
-                    <TableRow
-                      key={`${s.locationId}-${s.activity}-${s.date}-${s.startHour}-${s.startMinute}`}
-                      data-ocid={`schedule.item.${i + 1}`}
-                      className="hover:bg-muted/40 transition-colors"
-                    >
-                      <TableCell className="font-medium text-foreground py-3">
-                        {s.centre}
-                      </TableCell>
-                      <TableCell className="text-foreground py-3">
-                        {s.activity}
-                      </TableCell>
-                      <TableCell className="text-foreground py-3">
-                        {s.day}
-                      </TableCell>
-                      <TableCell className="text-foreground py-3 whitespace-nowrap">
-                        {formatDate(s.date)}
-                      </TableCell>
-                      <TableCell className="text-foreground py-3 whitespace-nowrap">
-                        {formatTime(s.startHour, s.startMinute)} –{" "}
-                        {formatTime(s.endHour, s.endMinute)}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground py-3 whitespace-nowrap">
-                        {formatAges(s.ageMin, s.ageMax)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          {/* Table */}
+          <ScheduleTable
+            sessions={activeSessions}
+            isLoading={isLoading}
+            isError={isError}
+            showActivityCol={true}
+          />
 
           {/* Card footer */}
           <div className="px-5 py-3 border-t border-border">
             <span className="text-xs text-muted-foreground">
               Data downloaded from City of Toronto Open Data · Last refreshed
-              March 19, 2026
+              March 25, 2026
             </span>
           </div>
         </div>
